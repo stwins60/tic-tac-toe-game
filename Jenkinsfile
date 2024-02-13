@@ -9,7 +9,7 @@ pipeline {
         DOCKERHUB_CREDENTIALS = credentials('d4506f04-b98c-47db-95ce-018ceac27ba6')
         SCANNER_HOME= tool 'sonar-scanner'
         IMAGE_NAME = 'idrisniyi94/tic-tac-toe-game'
-        IMAGE_TAG= "${env.BUILD_NUMBER}"
+        IMAGE_TAG = "${env.BUILD_NUMBER}"
     }
 
     stages {
@@ -91,7 +91,7 @@ pipeline {
             steps {
                 script {
                     def containerName = 'tic-tac-toe'
-                    def isRunning = sh(script: "docker ps -a | grep ${containeName}", returnStatus: true)
+                    def isRunning = sh(script: "docker ps -a | grep ${containerName}", returnStatus: true)
                     if(isRunning == 0) {
                         sh "docker rm -f ${containerName}"
                     }
