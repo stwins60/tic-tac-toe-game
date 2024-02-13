@@ -1,0 +1,132 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:        
+  build:
+    name: Build
+    runs-on: [eks-github-actions]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+        
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+      - uses: sonarsource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      
+      - name: Dependencies install using npm
+        run: |
+            npm install
+      
+      - name: Scan file using Trivy
+        run: trivy fs . > trivy_suggestions.txt
+
+      - name: Docker Build image
+        run: |
+          docker build -t tic-tac-toe-game .
+          docker tag tic-tac-toe-game adityadho/tic-tac-toe-game:latest
+          
+        env:
+          DOCKER_CLI_ACI: 1  
+
+      - name: Login to DockeHub
+        uses: docker/login-action@v3
+        
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      - name: Push Image to DockerHub
+        run: docker push adityadho/tic-tac-toe-game:latest
+        
+      - name: Scanning image using Trivy
+        run: trivy image adityadho/tic-tac-toe-game:latest > trivy_image_scan_report.txt
+
+  deploy:
+    needs: build
+    timeout-minutes: 10
+    runs-on: [eks-github-actions]
+    steps:
+      - name: Pull docker images
+        run: docker pull adityadho/tic-tac-toe-game:latest
+      
+      - name: Scan image using Trivy
+        run: trivy image adityadho/tic-tac-toe-game:latest > trivy_pull_image_scan.txt
+
+      - name: Check if container exists
+        id: check_container
+        run: |
+          if docker ps -a | grep game; then
+          echo "Container exists"
+          echo "::set-output name=container_exists::true"
+          else
+            echo "Container does not exist"
+            echo "::set-output name=container_exists::false"
+          fi
+        shell: bash  
+      
+      - name: Remove Container
+        if: steps.check_container.outputs.container_exists == 'true'
+        run: |
+          docker stop game
+          docker rm game
+        shell: bash
+
+      - name: Deploy to container
+        run: |
+          docker run -d --name game -p 3000:3000 adityadho/tic-tac-toe-game:latest  
+
+      - name: Update Kubeconfig
+        run: aws eks --region ap-south-1 update-kubeconfig --name EKS_CLOUD
+
+      - name: Deploy to K8's
+        run: |
+          # Delete the existing deployment if it exists
+          if kubectl get deployment tic-tac-toe &>/dev/null; then
+            kubectl delete deployment tic-tac-toe
+            echo "Existing deployment removed"
+          fi
+
+
+          # Delete the existing service if it exists
+          if kubectl get service tic-tac-toe-service &>/dev/null; then
+            kubectl delete service tic-tac-toe-service
+            echo "Existing service removed"
+          fi
+
+          kubectl apply -f deployment-service.yml 
+
+          current_directory=$(pwd)
+          echo "Current directory is: $current_directory"
+
+      - name: Slack Notification
+        if: always()
+        uses: act10ns/slack@v1
+        with:
+          status: ${{ job.status }}
+          steps: ${{ toJson(steps) }}
+          channel: '#github-actions-eks'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOKS_URL }}
+  
+  destroy: 
+    needs: [build, deploy]
+    runs-on: [eks-github-actions]
+    steps:
+
+      - name: Get current directory
+        run: | 
+          current_directory=$(pwd)
+          echo "Current directory is: $current_directory"
+
+      - name: Destroy Terraform build
+        working-directory: /home/ubuntu/tic-tac-toe-game/Eks-terraform
+        run: |
+          terraform destroy --auto-approve
+
