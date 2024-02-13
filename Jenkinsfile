@@ -56,7 +56,9 @@ pipeline {
         }
         stage('Trivy FS Scan') {
             steps {
-                sh "trivy fs ." > trivy-result.txt
+                script {
+                    sh "trivy fs ." > trivy-result.txt
+                }
             }
         }
         stage("Login to DockerHub") {
